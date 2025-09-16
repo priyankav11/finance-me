@@ -2,15 +2,11 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "priyankav/finance-me"
-    }
-
-    triggers {
-        pollSCM('* * * * *') // checks GitHub every minute for changes
+        DOCKER_IMAGE = "priis/finance-me"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
                 checkout scm
             }
@@ -18,30 +14,35 @@ pipeline {
 
         stage('Build & Test (Maven)') {
             steps {
-                sh 'mvn -q -DskipTests=false clean test'
-                junit 'target/surefire-reports/*.xml'
+                dir('app/finance-me') {   // 👈 move into the folder with pom.xml
+                    sh 'mvn -q -DskipTests=false clean test'
+                    junit 'target/surefire-reports/*.xml'
+                }
             }
         }
 
         stage('Package JAR') {
             steps {
-                sh 'mvn -q -DskipTests package'
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                dir('app/finance-me') {
+                    sh 'mvn -q package -DskipTests'
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t $DOCKER_IMAGE:$BUILD_NUMBER .'
+                sh 'docker build -t $DOCKER_IMAGE:$BUILD_NUMBER -f app/finance-me/Dockerfile app/finance-me'
                 sh 'docker tag $DOCKER_IMAGE:$BUILD_NUMBER $DOCKER_IMAGE:latest'
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'DOCKERHUB_CREDS',
-                  passwordVariable: 'DOCKERHUB_PASS', usernameVariable: 'DOCKERHUB_USER')]) {
-                    sh 'echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER --password-stdin'
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-cred',
+                                                 usernameVariable: 'DOCKER_USER',
+                                                 passwordVariable: 'DOCKER_PASS')]) {
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
                     sh 'docker push $DOCKER_IMAGE:$BUILD_NUMBER'
                     sh 'docker push $DOCKER_IMAGE:latest'
                 }
@@ -50,31 +51,20 @@ pipeline {
 
         stage('Deploy: Test (8081)') {
             steps {
-                sh 'docker rm -f finance-test || true'
-                sh 'docker run -d --name finance-test -p 8081:8080 $DOCKER_IMAGE:$BUILD_NUMBER'
-                sh 'sleep 5 && curl -sSf http://localhost:8081/actuator/health || true'
+                sh 'docker run -d -p 8081:8080 --name finance-me-test $DOCKER_IMAGE:$BUILD_NUMBER'
             }
         }
 
         stage('Approval for Prod') {
             steps {
-                input message: 'Promote to PROD?', ok: 'Deploy'
+                input message: 'Deploy to Production?', ok: 'Deploy'
             }
         }
 
         stage('Deploy: Prod (8082)') {
             steps {
-                sh 'docker rm -f finance-prod || true'
-                sh 'docker run -d --name finance-prod -p 8082:8080 $DOCKER_IMAGE:$BUILD_NUMBER'
-                sh 'sleep 5 && curl -sSf http://localhost:8082/actuator/health || true'
+                sh 'docker run -d -p 8082:8080 --name finance-me-prod $DOCKER_IMAGE:$BUILD_NUMBER'
             }
-        }
-    }
-
-    post {
-        always {
-            sh 'docker image prune -f || true'
-            echo "Build #${env.BUILD_NUMBER} complete"
         }
     }
 }
