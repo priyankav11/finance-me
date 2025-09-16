@@ -1,5 +1,8 @@
 pipeline {
     agent any
+    tools {
+        maven 'Maven-3.8.8'
+    }
 
     environment {
         DOCKER_IMAGE = "priis/finance-me"
@@ -12,11 +15,16 @@ pipeline {
             }
         }
 
+        stage('Check Maven') {
+            steps {
+                sh 'mvn -v'
+            }
+        }
+
         stage('Build & Test (Maven)') {
             steps {
-                dir('app/finance-me') {   // 👈 move into the folder with pom.xml
+                dir('app/finance-me') {
                     sh 'mvn -q -DskipTests=false clean test'
-                    junit 'target/surefire-reports/*.xml'
                 }
             }
         }
@@ -39,7 +47,7 @@ pipeline {
 
         stage('Push to DockerHub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-cred',
+                withCredentials([usernamePassword(credentialsId: 'DOCKERHUB_CREDS',
                                                  usernameVariable: 'DOCKER_USER',
                                                  passwordVariable: 'DOCKER_PASS')]) {
                     sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
@@ -48,23 +56,6 @@ pipeline {
                 }
             }
         }
-
-        stage('Deploy: Test (8081)') {
-            steps {
-                sh 'docker run -d -p 8081:8080 --name finance-me-test $DOCKER_IMAGE:$BUILD_NUMBER'
-            }
-        }
-
-        stage('Approval for Prod') {
-            steps {
-                input message: 'Deploy to Production?', ok: 'Deploy'
-            }
-        }
-
-        stage('Deploy: Prod (8082)') {
-            steps {
-                sh 'docker run -d -p 8082:8080 --name finance-me-prod $DOCKER_IMAGE:$BUILD_NUMBER'
-            }
-        }
     }
 }
+
